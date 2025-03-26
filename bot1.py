@@ -1,165 +1,186 @@
 import asyncio
-import websocket
+import websockets
+import logging
 import json
-import schedule
-import time
+from mexc_limit_order import place_limit_order
+from mexc_cancel_order import cancel_order
+from mexc_query_order import query_order
 from datetime import datetime, timedelta
-import pytz
-import rel, threading
 
-# Constants
-MARKET_OPEN_TIME = "09:30"
-MARKET_CLOSE_TIME = "11:00"
-TICK_SIZE = 0.01  # Replace with the actual tick size of the asset
-API_KEY = "your_api_key"
-API_SECRET = "your_api_secret"
 WEBSOCKET_URL = "wss://contract.mexc.com/edge"
-PAIR = "ADA-USDT"
+KEY = 'WEB53877d828cd0cdf90dbe40bb5bf2159c3b9e2a3156cd25edf17f8586b05082c3'
 
-# Global variables
-highest_price = float('-inf')
-lowest_price = float('inf')
+class TradingBot():
+    def __init__(self, symbol, key, api_key, api_secret):
+        self.symbol = symbol
+        self.key = key
+        self.api_key = api_key
+        self.api_secret = api_secret
 
-est = pytz.timezone("US/Eastern")
+        self.tick_size = self.get_ticker_size(symbol)
+        self.ticks_when_order_placed = -10
+        self.ticks_when_order_filled = 5
+        self.timeout_open_order = 10
+        self.timeout_filled_order = 60
+        self.stop_loss = 1e-3
+        self.active_order = {"orderId": 0, "time": None, "deadline": None}
+        
+        self.max_price = 0
+        # Set the minimum price to a very large number so that the first price update will be less than this value
+        self.min_price = 1e9
 
-async def fetch_price_data():
-    global highest_price, lowest_price
+        self.websocket = None
+        self.ping_interval = 5
+        self.lock = asyncio.Lock()
 
-    uri = "wss://contract.mexc.com/ws"  # Replace with the correct MEXC WebSocket endpoint
-    async with websocket.connect(uri) as websocket:
-        # Subscribe to ticker data
-        subscribe_message = {
-            "method": "sub.ticker",
-            "param": {"symbol": "BTC_USDT"},  # Replace with your desired trading pair
-            "id": 1
-        }
-        await websocket.send(json.dumps(subscribe_message))
+        self.logger = logging.getLogger(__name__)
+        tm = datetime.now()
+        tm_str = tm.strftime("%Y-%m-%d-%H%M%S")
+        logging.basicConfig(filename=f'log/log_{tm_str}.log', encoding='utf-8', level=logging.INFO)
+        logging.info(f"Trading bot started at {tm_str}")
 
+    def get_ticker_size(self, symbol):
+        with open("mexc_contract_info.json", "r") as f:
+            data = json.load(f)
+        for item in data:
+            if item["symbol"] == symbol:
+                return item["priceUnit"]
+    
+    async def start(self):
+        task_price = asyncio.create_task(self.get_real_time_price(WEBSOCKET_URL))
+        task_order = asyncio.create_task(self.track_order())
+        task_ping = asyncio.create_task(self.ping())
+
+        await asyncio.gather(task_price, task_order)
+        #await self.get_real_time_price(WEBSOCKET_URL)
+
+    async def get_real_time_price(self, url):
+        async with websockets.connect(url) as websocket:
+            self.websocket = websocket
+
+            # Subscribe to the ticker channel for a specific symbol (e.g., BTC_USDT)
+            subscribe_message = {"method": "sub.ticker",
+                "param": {
+                            "symbol": self.symbol,
+            }}  
+            await websocket.send(json.dumps(subscribe_message))
+            self.logger.info(f"Subscribed to {subscribe_message['method']} price updates.")
+
+            while True:
+                try:
+                    response = await websocket.recv()
+                    data = json.loads(response)
+                    if "symbol" in data:
+                        price = data["data"]["lastPrice"]
+                        self.logger.info(f"Real-time price update: {price}")
+                        if price > self.max_price:
+                            self.max_price = price
+                            self.logger.info(f"    Max price updated: {self.max_price}")
+                            direction = "buy"
+                            #success = await self.place_order("buy")
+                        elif price < self.min_price:
+                            self.min_price = price
+                            self.logger.info(f"    Min price updated: {self.min_price}")
+                            direction = "sell"
+                            #success = await self.place_order("sell")
+                        async with self.lock:
+                            if self.active_order["orderId"] == 0:
+                                success = await self.place_order(direction)
+
+                except Exception as e:
+                    self.logger.error("Error:", e)
+                    break
+
+    async def track_order(self):
         while True:
-            response = await websocket.recv()
-            data = json.loads(response)
+            async with self.lock:
+                if self.active_order["orderId"] != 0:
+                    try:
+                        response = query_order(self.api_key, self.api_secret, self.active_order["orderId"])
+                        success = response["success"]
+                        if success:
+                            positionId = response["data"]["positionId"]
+                            if positionId > 0:
+                                self.logger.info("  Order filled successfully. Position ID: {positionId}")
+                            #self.logger.info(f"Order placed successfully. orderId = {self.active_order}")
+                            #tm_start = datetime.now()
+                            #tm_end = tm_start + timedelta(seconds=5)
+                            #while datetime.now() < tm_end:
+                            #    await asyncio.sleep(1)
+                            else:
+                                if datetime.now() > self.active_order["deadline"]:
+                                    self.logger.info("  Order timed out.")
+                                    response = cancel_order(self.key, [self.active_order["orderId"]])
+                                    success = response["success"]
+                                    if success:
+                                        data = response["data"]
+                                        found = False
+                                        for item in data:
+                                            if item["orderId"] == self.active_order["orderId"]:
+                                                errorCode = item["errorCode"]
+                                                found = True
+                                                break
+                                        if not found:
+                                            self.logger.warning(f"  Order {self.active_order["orderId"]} NOT FOUND!")
+                                        else:
+                                            if errorCode == 0:
+                                                self.logger.info(f"  Order {self.active_order["orderId"]} cancelled successfully.")
+                                                self.active_order["orderId"] = 0
+                                            else:
+                                                response = query_order(self.api_key, self.api_secret, self.active_order)
+                                                success = response["success"]
+                                                if success:
+                                                    positionId = response["data"]["positionId"]
+                                                    self.logger.info("  Position ID: {positionId}")
+                                                    self.logger.info("  Order filled successfully.")
+                                                else:
+                                                    self.logger.warning("  Failed to query order.")
+                                    else:
+                                        self.logger.warning("Failed to cancel order.")
+                        else:
+                            self.logger.warning("Failed to place order.")
+                    
+                    except Exception as e:
+                        self.logger.error("Error:", e)
+                        break
+            await asyncio.sleep(0.5)
 
-            if "data" in data and "lastPrice" in data["data"]:
-                last_price = float(data["data"]["lastPrice"])
-                print(f"Received price: {last_price}")
+    async def place_order(self, direction):
+        assert direction == "buy" or direction == "sell"
+        if direction == "buy":
+            price = self.max_price + self.tick_size * self.ticks_when_order_placed
+        else:
+            price = self.min_price - self.tick_size * self.ticks_when_order_placed
+        response = place_limit_order(self.symbol, price, 1, 1 if direction == "buy" else 3, self.key)
+        success = response["success"]
+        if success:
+            tm = datetime.fromtimestamp(response["data"]["ts"] / 1000)
+            deadline = tm + timedelta(seconds=self.timeout_open_order)
+            self.active_order = {"orderId": int(response["data"]["orderId"]),
+                                 "time": tm,
+                                 "deadline": deadline}
+            self.logger.info(f"Placed {direction} order with ID {self.active_order["orderId"]} at {self.active_order["time"]}")
+        else:
+            self.logger.warning(f"Failed to place {direction} order.")
+        
+        return success
 
-                # Update highest and lowest prices
-                if last_price > highest_price:
-                    highest_price = last_price
-                    print(f"New highest price: {highest_price}")
-                    await handle_new_high(last_price)
-
-                if last_price < lowest_price:
-                    lowest_price = last_price
-                    print(f"New lowest price: {lowest_price}")
-                    await handle_new_low(last_price)
-
-async def handle_new_high(price):
-    buy_price = price + 2 * TICK_SIZE
-    print(f"Placing limit buy order at {buy_price}")
-    # Place limit buy order (implement API call here)
-
-    await asyncio.sleep(20)  # Wait for 20 seconds
-
-    sell_price = buy_price + 10 * TICK_SIZE
-    print(f"Placing limit sell order at {sell_price}")
-    # Place limit sell order (implement API call here)
-
-async def handle_new_low(price):
-    sell_price = price - 2 * TICK_SIZE
-    print(f"Placing limit sell order at {sell_price}")
-    # Place limit sell order (implement API call here)
-
-    await asyncio.sleep(20)  # Wait for 20 seconds
-
-    buy_price = sell_price - 10 * TICK_SIZE
-    print(f"Placing limit buy order at {buy_price}")
-    # Place limit buy order (implement API call here)
-
-def start_bot():
-    print("Starting bot...")
-    connect_websocket()
-    asyncio.run(fetch_price_data())
-
-def schedule_bot():
-    # Schedule the bot to start 15 minutes before market open and stop at market close
-    today = datetime.now(tz=pytz.utc)
-    market_open = est.localize(datetime(today.year, today.month, today.day, hour=13, minute=17)).astimezone(pytz.timezone("Asia/Tokyo"))
-    #start_time = (market_open - timedelta(minutes=15)).time()
-    start_time = market_open
-    close_time = est.localize(datetime(today.year, today.month, today.day, hour=12, minute=20)).astimezone(pytz.utc)
-
-    schedule.every().day.at(start_time.strftime("%H:%M")).do(start_bot)
-    schedule.every().day.at(close_time.strftime("%H:%M")).do(stop_bot)
-
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-
-def on_open(ws):
-    print("### opened ###")
-    params = {"method": "sub.ticker",
-              "param": {
-                        "symbol": PAIR,
-            }}  # Subscribe to ticker data for {PAIR}
-
-    # Send authentication request
-    ws.send(json.dumps(params))
-
-def on_message(ws, message):
-    data = json.loads(message)
-    """
-    if 'channel' in data:
-        if data['channel'] == "rs.sub.ticker":
-            print(f"{data['data']}, timestamp {datetime.fromtimestamp(data['timestamp']/1000)}")
-    if 'data' in data:
-        data = data['data']
-        print(f"{PAIR}: lastPrice {data['lastPrice']}, timestamp {datetime.fromtimestamp(data['timestamp']/1000)}")
-    """
-    
-# WebSocket error handler
-def on_error(ws, error):
-    print(error)
-
-# WebSocket close handler
-def on_close(ws, close_status_code, close_msg):
-    print("### closed ###")
-    print(f"WebSocket closed with status code: {close_status_code}, message: {close_msg}")
-    print("WebSocket closed. Reconnecting in 5 seconds...")
-    time.sleep(5)
-    connect_websocket()
-
-def connect_websocket():
-    ws = websocket.WebSocketApp(WEBSOCKET_URL,
-                              on_open=on_open,
-                              on_message=on_message,
-                              on_error=on_error,
-                              on_close=on_close)
-
-    ws.run_forever(dispatcher=rel, reconnect=5)  # Set dispatcher to automatic reconnection, 5 second reconnect delay if connection closed unexpectedly
-    rel.signal(2, rel.abort)  # Keyboard Interrupt
-    rel.dispatch()
-    
-    # Start the ping thread (20 seconds interval)
-    ping_thread = threading.Thread(target=send_ping, args=(ws, 10), daemon=True)
-    ping_thread.start()
-
-def send_ping(ws, interval=10):
-    """Continuously sends a ping message every 'interval' seconds"""
-    while True:
-        time.sleep(interval)
+    async def ping(self):
+        """Periodically send ping messages to keep the connection alive"""
         try:
-            ws.send(json.dumps({"method": "ping"}))
-            print("Ping sent")
-        except Exception as e:
-            print("Ping failed, WebSocket might be closed:", e)
-            break  # Exit thread if WebSocket is closed
+            while True:
+                if self.websocket:
+                    try:
+                        await self.websocket.ping()
+                        self.logger.info("Ping sent to server")
+                    except Exception as e:
+                        self.logger.warning(f"Ping failed: {e}")
+                await asyncio.sleep(self.ping_interval)
+        except asyncio.CancelledError:
+            self.logger.error("Ping task cancelled")
 
-def stop_bot():
-    print("Stopping bot...")
-    # Implement any cleanup logic if necessary
-    exit()
-
+# Run the event loop
 if __name__ == "__main__":
-    #connect_websocket()
-    schedule_bot()
+    bot = TradingBot("ADA_USDT", KEY, 'mx0vgldfeNOhoYdin6', '6c6bef17d51341d98f6296f51eca3a98')
+    asyncio.run(bot.start())
+    

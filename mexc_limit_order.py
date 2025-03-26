@@ -41,7 +41,7 @@ def place_limit_order(symbol, price, volume, side, key):
 
     response = place_order(key, obj, 'https://futures.mexc.com/api/v1/private/order/create')
 
-    print(f"Placing {side} order")
+#    print(f"Placing {side} order")
     return response
 
 # Example usage
