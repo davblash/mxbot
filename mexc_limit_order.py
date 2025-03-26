@@ -27,7 +27,7 @@ def create_signature(params, secret):
     return hmac.new(secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
 """
 
-def place_limit_order(symbol, price, volume, side, key):
+def place_limit_order(symbol, price, volume, leverage, side, sl, tp, key):
     obj = { 
         "symbol": symbol, 
         "side": side, 
@@ -37,6 +37,8 @@ def place_limit_order(symbol, price, volume, side, key):
         "leverage": 1, 
         "price": price, 
         "priceProtect": "0",
+        "stopLossPrice": sl,
+        "takeProfitPrice": tp
     }
 
     response = place_order(key, obj, 'https://futures.mexc.com/api/v1/private/order/create')
