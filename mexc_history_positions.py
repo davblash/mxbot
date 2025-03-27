@@ -5,8 +5,8 @@ import requests
 import json
 
 # Replace with your API Key and Secret Key
-API_KEY = 'mx0vglgZKFlnQKdKfe'
-SECRET_KEY = 'f392536bdf784b7c975259a09523bbd4'
+API_KEY = 'mx0vgldfeNOhoYdin6'
+SECRET_KEY = '6c6bef17d51341d98f6296f51eca3a98'
 #BASE_URL = 'https://api.mexc.com'
 BASE_URL = 'https://contract.mexc.com'
 
@@ -18,7 +18,7 @@ def generate_signature(params, timestamp, secret_key):
     return signature
 
 # Example: Fetch account balances
-def get_history_positions(symbol):
+def get_history_positions(symbol, api_key, api_secret):
     path = '/api/v1/private/position/list/history_positions'
     url = BASE_URL + path
     timestamp = int(time.time() * 1000)
@@ -26,11 +26,11 @@ def get_history_positions(symbol):
     #params = {}
     params = {'symbol': symbol, 'page_num': 1, 'page_size': 100}
     #params['signature'] = generate_signature(params, timestamp, SECRET_KEY)
-    signature = generate_signature(params, timestamp, SECRET_KEY)
+    signature = generate_signature(params, timestamp, api_secret)
 
     headers = {
         'Conten-Type': 'application/json',
-        'ApiKey': API_KEY,
+        'ApiKey': api_key,
         'Request-Time': str(timestamp),
         'Signature': signature
     }
@@ -52,5 +52,5 @@ if result['success']:
         json.dump(result, f, indent='\t')
 '''
 if __name__ == '__main__':
-    response = get_history_positions('ZECUSDT')
+    response = get_history_positions('ADA_USDT', API_KEY, SECRET_KEY)
     print(response)
