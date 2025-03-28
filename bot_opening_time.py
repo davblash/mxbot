@@ -10,6 +10,7 @@ from mexc_query_order import query_order
 from mexc_open_positions import get_open_positions
 from mexc_request import place_order
 from datetime import datetime, timedelta
+import schedule
 import logging
 import asyncio
 
@@ -26,15 +27,20 @@ class TradingBot():
 
         self.tick_size = self.get_ticker_size(symbol)
         self.ticks_when_order_placed = 2
-        self.ticks_when_order_filled = 5
+        #self.ticks_when_order_filled = 5
+        self.tp_ticks = 5
+        self.sl_ticks = 1
+        self.trigger_ticks = 4
+        self.close_ticks = 2
+
         self.timeout_open_order = 10
         self.timeout_filled_order = 60
-        self.stop_loss = self.tick_size * 5
+        #self.stop_loss = self.tick_size * 5
         self.volume = 1
         self.leverage = 10
         self.active_order = {"orderId": 0, "time": None, "deadline": None}
 
-        self.lookback_interval = 3
+        self.lookback_interval = 1
         self.lastPrice = 0
         self.max_price = 0
         # Set the minimum price to a very large number so that the first price update will be less than this value
@@ -86,20 +92,19 @@ class TradingBot():
                 return item["priceUnit"]
     
     def place_and_track_order(self, direction):
-        with self.lock:
-            if self.active_order["orderId"] != 0:
-                self.logger.info(f"  Order already placed: {self.active_order['orderId']}")
-                return False
-            
         assert direction == "buy" or direction == "sell"
         if direction == "buy":
             price = self.max_price + self.tick_size * self.ticks_when_order_placed
-            sl_price = price - self.stop_loss
-            tp_price = price + 2 * self.stop_loss
+            sl_price = price - self.tick_size * self.sl_ticks
+            tp_price = price + self.tick_size * self.tp_ticks
+            trigger_price = price + self.tick_size * self.trigger_ticks
+            close_price = price + self.tick_size * self.close_ticks
         else:
             price = self.min_price - self.tick_size * self.ticks_when_order_placed
-            sl_price = price + self.stop_loss
-            tp_price = price - 2 * self.stop_loss
+            sl_price = price + self.tick_size * self.sl_ticks
+            tp_price = price - self.tick_size * self.tp_ticks
+            trigger_price = price - self.tick_size * self.trigger_ticks
+            close_price = price - self.tick_size * self.close_ticks
         
         response = place_limit_order(self.symbol, 
                                      price, 
@@ -113,13 +118,17 @@ class TradingBot():
         success = response["success"]
         if success:
             positionId = 0
-            with self.lock:
-                tm = datetime.fromtimestamp(response["data"]["ts"] / 1000)
-                deadline = tm + timedelta(seconds=self.timeout_open_order)
+            tm = datetime.fromtimestamp(response["data"]["ts"] / 1000)
+            deadline = tm + timedelta(seconds=self.timeout_open_order)
+            with self.lock:    
                 self.active_order = {"orderId": int(response["data"]["orderId"]),
+                                    "positionId": 0,
+                                    "triggerPrice": trigger_price,
+                                    "closePrice": close_price,
+                                    "direction": direction,
                                     "time": tm,
                                     "deadline": deadline}
-                self.logger.info(f"Placed {direction} order with ID {self.active_order["orderId"]} at {self.active_order["time"]}")
+            self.logger.info(f"Placed {direction} order with ID {self.active_order["orderId"]} at {self.active_order["time"]}")
             
             order_filled = False
             while datetime.now() < deadline:
@@ -132,6 +141,8 @@ class TradingBot():
                     if code == 0:
                         positionId = response["data"]["positionId"]
                         if positionId != 0:
+                            with self.lock:
+                                self.active_order["positionId"] = positionId
                             self.logger.info(f"  Order filled successfully. Position ID: {positionId}")
                             order_filled = True
                             break
@@ -139,7 +150,8 @@ class TradingBot():
                         self.logger.warning(f"  Error while querying order {self.active_order["orderId"]}. Code : {code}")
                 else:
                     self.logger.warning("  Failed to query order.")
-                time.sleep(0.3)
+                time.sleep(0.1)
+
             if not order_filled:
                 # Check again if the order is filled
                 response = query_order(self.api_key, self.api_secret, self.active_order["orderId"])
@@ -149,6 +161,8 @@ class TradingBot():
                     if code == 0:
                         positionId = response["data"]["positionId"]
                         if positionId != 0:
+                            with self.lock:
+                                self.active_order["positionId"] = positionId
                             self.logger.info(f"  Order filled successfully. Position ID: {positionId}")
                             order_filled = True
 
@@ -172,7 +186,7 @@ class TradingBot():
                         if errorCode == 0:
                             self.logger.info(f"  Order {self.active_order["orderId"]} cancelled successfully.")
                             with self.lock:
-                                self.active_order = {"orderId": 0, "time": None, "deadline": None}
+                                self.active_order = {"orderId": 0, "positionId": 0, "time": None, "deadline": None}
                             return True
                         else:
                             response = query_order(self.api_key, self.api_secret, self.active_order["orderId"])
@@ -182,6 +196,8 @@ class TradingBot():
                                 if code == 0:
                                     positionId = response["data"]["positionId"]
                                     if positionId != 0:
+                                        with self.lock:
+                                            self.active_order["positionId"] = positionId
                                         self.logger.info(f"  Order filled successfully. Position ID: {positionId}")
                                         order_filled = True
                                 else:
@@ -219,17 +235,21 @@ class TradingBot():
                                                      f" openAvgPrice: {openAvgPrice}, "
                                                      f" closeAvgPrice: {closeAvgPrice}, Realized profit: {realized}")
                                     with self.lock:
-                                        self.active_order = {"orderId": 0, "time": None, "deadline": None}
+                                        self.active_order = {"orderId": 0, "posiitonId":0, "time": None, "deadline": None}
                                     return True
                         else:
                             self.logger.warning(f"  Failed to query open positions. {response["code"]}: {response["message"]}")
                     else:
                         self.logger.warning(f"  Failed to query open positions. {response["code"]}: {response["message"]}")
-                    time.sleep(0.3)
+                    time.sleep(0.1)
                 
                 self.logger.info("  Position not closed within the timeout period. Closing it.")
                 
-                response = self.close_position(positionId, 4 if direction == "buy" else 2, self.volume, self.lastPrice, self.key)
+                response = self.close_position(positionId,
+                                               4 if direction == "buy" else 2,
+                                               self.volume,
+                                               self.lastPrice,
+                                               self.key)
                 
                 if response["success"]:
                     if response["code"] == 0:
@@ -240,28 +260,29 @@ class TradingBot():
                     self.logger.warning(f"  Failed to close position {positionId}")
 
                 with self.lock:
-                    self.active_order = {"orderId": 0, "time": None, "deadline": None}
+                    self.active_order = {"orderId": 0, "positionId": 0, "time": None, "deadline": None}
                 return True
 
             else:
                 self.logger.error(f"Failed to cancel order {self.active_order["orderId"]}. Abandon it.")
                 with self.lock:
-                    self.active_order = {"orderId": 0, "time": None, "deadline": None}
+                    self.active_order = {"orderId": 0, "positionId":0, "time": None, "deadline": None}
                 return True
         else:
             self.logger.warning(f"Failed to place {direction} order.")
         
         return success
 
-    def close_position(self, positionId, side, volume, price, key):
+    def close_position(self, positionId, side, volume, price, type, key):
+        assert type == "market" or type == "limit"
+        type = 5 if type == "market" else 1
         obj = { 
             "symbol": self.symbol, 
             "side": side, 
             "openType": 1,  # Isolated margin
             "positionId": positionId,
-            "type": 5,    # Market order
+            "type": type,    # Market order
             "vol": volume, 
-            #"leverage": 1, 
             "price": price, 
             "priceProtect": "0",
         }
@@ -279,7 +300,8 @@ class TradingBot():
                 if 'data' in data:
                     data = data['data']
                     price = data['lastPrice']
-                    self.lastPrice = price
+                    with self.lock:
+                        self.lastPrice = price
                     self.logger.info(f"{self.symbol}: lastPrice {price}, timestamp {datetime.fromtimestamp(data['timestamp']/1000)}")
                     direction = ""
                     if price > self.max_price:
@@ -290,9 +312,53 @@ class TradingBot():
                         self.min_price = price
                         self.logger.info(f"    Min price updated: {self.min_price}")
                         direction = "sell"
-                    if direction != "":
-                        threading.Thread(target=self.place_and_track_order, args=(direction,), daemon=True).start()
 
+                    with self.lock:
+                        if self.active_order["orderId"] != 0:
+                            if self.active_order["positionId"] != 0:
+                                response = None
+                                if self.active_order["direction"] == "buy" and price >= self.active_order["triggerPrice"]:
+                                    response = self.close_position(self.active_order["positionId"],
+                                                                    4,
+                                                                    self.volume,
+                                                                    self.active_order["closePrice"],
+                                                                    "limit",
+                                                                    self.key)
+                                    #self.logger.info(f"  Position {self.active_order["positionId"]} closed at {price}")
+                                    #self.active_order = {"orderId": 0, "positionId": 0, "time": None, "deadline": None}
+                                
+                                elif self.active_order["direction"] == "sell" and price <= self.active_order["triggerPrice"]:
+                                    response = self.close_position(self.active_order["positionId"],
+                                                                    2,
+                                                                    self.volume,
+                                                                    self.active_order["closePrice"],
+                                                                    "limit",
+                                                                    self.key)
+                                    #self.logger.info(f"  Position {self.active_order["positionId"]} closed at {price}")
+                                    #self.active_order = {"orderId": 0, "positionId": 0, "time": None, "deadline": None}
+                                
+                                if response:
+                                    if response["success"]:
+                                        if response["code"] == 0:
+                                            self.logger.info(f"  Position {self.active_order["positionId"]} limit closed because trigger price was reached.")
+                                        else:
+                                            self.logger.warning(f"  Error while limit closing position {self.active_order["positionId"]}. Code: {response["code"]}")
+                                    else:
+                                        self.logger.warning(f"  Failed to limit close position {self.active_order["positionId"]}")
+
+                        else:
+                            if direction != "":
+                                threading.Thread(target=self.place_and_track_order, args=(direction,), daemon=True).start()
+                    """
+                    if direction != "":
+                        with self.lock:
+                            if self.active_order["orderId"] != 0:
+                                self.logger.info(f"  Order already placed: {self.active_order['orderId']}")
+                                return False
+                            else:
+                                threading.Thread(target=self.place_and_track_order, args=(direction,), daemon=True).start()
+                    """
+                    
 
 
     # WebSocket error handler
@@ -362,6 +428,21 @@ class TradingBot():
             if self.ws:
                 self.ws.close()
 
-if __name__ == "__main__":
+def job():
     bot = TradingBot("ADA_USDT", KEY, 'mx0vgldfeNOhoYdin6', '6c6bef17d51341d98f6296f51eca3a98')
+    print("### Starting bot ###")
     bot.run()
+
+if __name__ == "__main__":
+    #bot = TradingBot("ADA_USDT", KEY, 'mx0vgldfeNOhoYdin6', '6c6bef17d51341d98f6296f51eca3a98')
+    start_time = "09:30"
+    schedule.every().monday.at(start_time, "US/Eastern").do(job)
+    schedule.every().tuesday.at(start_time, "US/Eastern").do(job)
+    schedule.every().wednesday.at(start_time, "US/Eastern").do(job)
+    schedule.every().thursday.at(start_time, "US/Eastern").do(job)
+    schedule.every().friday.at(start_time, "US/Eastern").do(job)
+    
+    #bot.run()
+    while True:
+        schedule.run_pending()
+        time.sleep(1)

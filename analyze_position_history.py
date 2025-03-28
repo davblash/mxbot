@@ -50,10 +50,15 @@ def extract_position_history(position_ids, symbol):
             break
     
     df = pd.DataFrame(position_history)
+
+    # Reorder columns
+    df = df[["createTime", "updateTime", "symbol", "positionType", "leverage", "openAvgPrice", "closeAvgPrice", "profitRatio", "closeProfitLoss", "realised", "positionId"]]
+
     # Drop unnecessary columns
-    df.drop(columns=["openType", "state", "holdVol", "frozenVol", "closeVol", \
-                     "holdAvgPrice", "openAvgPriceFullyScale", "newOpenAvgPrice", "newCloseAvgPrice", \
-                     "holdAvgPriceFullyScale", "deductFeeList", "liquidatePrice", "im", "holdFee", "autoAddIm"], inplace=True)
+#    df.drop(columns=["openType", "state", "holdVol", "frozenVol", "closeVol", \
+#                     "holdAvgPrice", "openAvgPriceFullyScale", "newOpenAvgPrice", "newCloseAvgPrice", \
+#                     "holdAvgPriceFullyScale", "deductFeeList", "liquidatePrice", "im", "oim", "version", \
+#                     "fee", "positionShowStatus", "holdFee", "autoAddIm"], inplace=True)
 
     # Convert createTime field to datetime
     df["createTime"] = pd.to_datetime(df["createTime"], unit="ms")
@@ -74,7 +79,7 @@ if __name__ == "__main__":
     API_KEY = 'mx0vgldfeNOhoYdin6'
     SECRET_KEY = '6c6bef17d51341d98f6296f51eca3a98'
 
-    log_file_path = "log/log_2025-03-26-134122.log"
+    log_file_path = "log/log_2025-03-27-133000.log"
     position_ids = get_position_ids(log_file_path)
     
     symbol = 'ADA_USDT'

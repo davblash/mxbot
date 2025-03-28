@@ -34,7 +34,7 @@ def place_limit_order(symbol, price, volume, leverage, side, sl, tp, key):
         "openType": 1,  # Isolated margin
         "type": 1,    # Limit order
         "vol": volume, 
-        "leverage": 1, 
+        "leverage": leverage, 
         "price": price, 
         "priceProtect": "0",
         "stopLossPrice": sl,
