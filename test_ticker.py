@@ -10,7 +10,7 @@ from mexc_request import place_order
 #from mexc_open_positions import get_open_positions
 REST_API_URL = 'https://contract.mexc.com'
 WEBSOCKET_URL = "wss://contract.mexc.com/edge"
-PAIR = "ADA_USDT"
+PAIR = "SOL_USDT"
 CONTRACT_SIZE = 0
 QTY = 50
 VOLUME = 0
@@ -38,7 +38,9 @@ def on_message(ws, message):
             print(f"{data['data']}, timestamp {datetime.fromtimestamp(data['timestamp']/1000)}")
     if 'data' in data:
         data = data['data']
-        print(f"{PAIR}: lastPrice {data['lastPrice']}, timestamp {datetime.fromtimestamp(data['timestamp']/1000)}")
+        print(f"{PAIR}: lastPrice {data['lastPrice']}, "
+              f"bid1 {data['bid1']}, ask1 {data['ask1']}; "
+              f" timestamp {datetime.fromtimestamp(data['timestamp']/1000)}")
 
 # WebSocket error handler
 def on_error(ws, error):

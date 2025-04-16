@@ -79,10 +79,10 @@ if __name__ == "__main__":
     API_KEY = 'mx0vgldfeNOhoYdin6'
     SECRET_KEY = '6c6bef17d51341d98f6296f51eca3a98'
 
-    log_file_path = "log/log_2025-03-27-133000.log"
+    log_file_path = "log/log_2025-03-28-133000.log"
     position_ids = get_position_ids(log_file_path)
     
-    symbol = 'ADA_USDT'
+    symbol = 'XLM_USDT'
     position_history = extract_position_history(position_ids, symbol)
 
     # Save position history to a CSV file

@@ -28,7 +28,7 @@ class TradingBot():
         self.tick_size = self.get_ticker_size(symbol)
         self.ticks_when_order_placed = 2
         #self.ticks_when_order_filled = 5
-        self.tp_ticks = 5
+        self.tp_ticks = 2
         self.sl_ticks = 1
         self.trigger_ticks = 4
         self.close_ticks = 2
@@ -40,7 +40,7 @@ class TradingBot():
         self.leverage = 10
         self.active_order = {"orderId": 0, "time": None, "deadline": None}
 
-        self.lookback_interval = 1
+        self.lookback_interval = 5
         self.lastPrice = 0
         self.max_price = 0
         # Set the minimum price to a very large number so that the first price update will be less than this value
@@ -429,7 +429,7 @@ class TradingBot():
                 self.ws.close()
 
 def job():
-    bot = TradingBot("ADA_USDT", KEY, 'mx0vgldfeNOhoYdin6', '6c6bef17d51341d98f6296f51eca3a98')
+    bot = TradingBot("XLM_USDT", KEY, 'mx0vgldfeNOhoYdin6', '6c6bef17d51341d98f6296f51eca3a98')
     print("### Starting bot ###")
     bot.run()
 
