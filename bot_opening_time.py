@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 import schedule
 import logging
 import asyncio
+import os
+from dotenv import load_dotenv
 
 RESTAPI_URL = "https://contract.mexc.com/"
 WEBSOCKET_URL = "wss://contract.mexc.com/edge"
@@ -40,7 +42,7 @@ class TradingBot():
         self.leverage = 10
         self.active_order = {"orderId": 0, "time": None, "deadline": None}
 
-        self.lookback_interval = 5
+        self.lookback_interval = 60
         self.lastPrice = 0
         self.max_price = 0
         # Set the minimum price to a very large number so that the first price update will be less than this value
@@ -429,19 +431,45 @@ class TradingBot():
                 self.ws.close()
 
 def job():
-    bot = TradingBot("XLM_USDT", KEY, 'mx0vgldfeNOhoYdin6', '6c6bef17d51341d98f6296f51eca3a98')
+    webkey = os.getenv('WEBKEY')
+    if webkey is None:
+        print("WEBKEY not found in .env file")
+        return
+    print(f"WEBKEY: {webkey}")
+    # Initialize the trading bot with the symbol and API keys
+    api_key = os.getenv('API_KEY')
+    api_secret = os.getenv('API_SECRET')
+    if api_key is None or api_secret is None:
+        print("API_KEY or API_SECRET not found in .env file")
+        return
+    print(f"API_KEY: {api_key}")
+    symbol = os.getenv('SYMBOL')
+    if symbol is None:
+        print("SYMBOL not found in .env file")
+        return
+    print(f"SYMBOL: {symbol}")
+
+    # Initialize the trading bot with the symbol and API keys
+    bot = TradingBot(symbol, webkey, api_key, api_secret)
+    #bot = TradingBot("XLM_USDT", KEY, 'mx0vgldfeNOhoYdin6', '6c6bef17d51341d98f6296f51eca3a98')
     print("### Starting bot ###")
     bot.run()
 
 if __name__ == "__main__":
-    #bot = TradingBot("ADA_USDT", KEY, 'mx0vgldfeNOhoYdin6', '6c6bef17d51341d98f6296f51eca3a98')
-    start_time = "09:30"
-    schedule.every().monday.at(start_time, "US/Eastern").do(job)
-    schedule.every().tuesday.at(start_time, "US/Eastern").do(job)
-    schedule.every().wednesday.at(start_time, "US/Eastern").do(job)
-    schedule.every().thursday.at(start_time, "US/Eastern").do(job)
-    schedule.every().friday.at(start_time, "US/Eastern").do(job)
-    
+    load_dotenv()
+
+    mode = os.getenv('APPMODE')
+    if mode == "production":
+        start_time = "09:30"
+        schedule.every().monday.at(start_time, "US/Eastern").do(job)
+        schedule.every().tuesday.at(start_time, "US/Eastern").do(job)
+        schedule.every().wednesday.at(start_time, "US/Eastern").do(job)
+        schedule.every().thursday.at(start_time, "US/Eastern").do(job)
+        schedule.every().friday.at(start_time, "US/Eastern").do(job)
+    elif mode == "development":
+        # Run the bot immediately
+        job()
+
     #bot.run()
     while True:
         schedule.run_pending()

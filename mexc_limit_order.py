@@ -46,6 +46,36 @@ def place_limit_order(symbol, price, volume, leverage, side, sl, tp, key):
 #    print(f"Placing {side} order")
     return response
 
+def place_trigger_order(symbol, triggerPrice, volume, leverage, side, sl, tp, key, mhash, chash, mtoken):
+    obj = { 
+        "chash": chash,
+        "executeCycle": 3,
+        "mhash": mhash,
+        "mtoken": mtoken,
+        "symbol": symbol, 
+        "side": side, 
+        "openType": 1,  # Isolated margin
+        #"type": 1,    # Market order
+        "orderType": 5,  # Trigger order
+        "positionMode": 1,
+        "vol": volume, 
+        "leverage": leverage, 
+        #"price": price, 
+        "triggerPrice": triggerPrice,
+        "triggerType": 1 if side == 1 else 2,  # Trigger order
+        "priceProtect": "0",
+        "stopLossPrice": sl,
+        "takeProfitPrice": tp,
+          #"lossTrend": '1',
+          #"profitTrend": '1',
+          "trend": '1',
+    }
+
+    response = place_order(key, obj, f'https://futures.mexc.com/api/v1/private/planorder/place/v2?mhash={mhash}')
+
+#    print(f"Placing {side} order")
+    return response
+
 # Example usage
 if __name__ == '__main__':
     symbol = 'ADA_USDT'

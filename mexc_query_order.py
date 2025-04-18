@@ -34,6 +34,29 @@ def query_order(api_key, api_secret, order_id):
 
     return response.json()
 
+def query_trigger_order(api_key, api_secret, symbol, page_num, page_size):
+    REST_API_URL = 'https://contract.mexc.com/'
+    ENDPOINT = 'api/v1/private/planorder/list/orders'
+
+    timestamp = int(time.time() * 1000)
+    obj = {
+        "symbol": symbol,
+        "page_num": page_num,
+        "page_size": page_size
+    }
+    signature = generate_signature(obj, timestamp, api_secret)
+
+    headers = {
+        'Conten-Type': 'application/json',
+        'ApiKey': api_key,
+        'Request-Time': str(timestamp),
+        'Signature': signature
+    }
+
+    response = requests.get(REST_API_URL + ENDPOINT, headers=headers, params=obj)
+
+    return response.json()
+
 # Example usage
 if __name__ == '__main__':
     oid = 659077250775436288
